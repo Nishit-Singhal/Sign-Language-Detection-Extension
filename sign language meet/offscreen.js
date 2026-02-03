@@ -9,39 +9,95 @@ const video = document.getElementById("video");
 let detectionEnabled = false;
 let lastGesture = "";
 let lastSeen = 0;
+let stream = null;
+let handLandmarker = null;
+let vision = null;
 
 const CLEAR_DELAY = 800;
 
-// ---------------- ENABLE DETECTION ----------------
-chrome.runtime.onMessage.addListener(msg => {
+// ---------------- ENABLE/DISABLE DETECTION ----------------
+chrome.runtime.onMessage.addListener(async (msg) => {
   if (msg.type === "ENABLE_DETECTION") {
     detectionEnabled = true;
     console.log("Detection ENABLED");
+    
+    // Start camera if not already started
+    if (!stream) {
+      await startCamera();
+    }
+    
+    // Initialize MediaPipe if not already initialized
+    if (!handLandmarker) {
+      await initMediaPipe();
+    }
+  }
+  
+  if (msg.type === "DISABLE_DETECTION") {
+    detectionEnabled = false;
+    console.log("Detection DISABLED");
+    
+    // Stop speech
+    speechSynthesis.cancel();
+    
+    // Clear last gesture
+    lastGesture = "";
+    
+    // Stop camera
+    stopCamera();
+    
+    // Clear subtitles
+    chrome.runtime.sendMessage({
+      type: "SIGN_DETECTED",
+      text: ""
+    });
   }
 });
 
 // ---------------- CAMERA ----------------
-const stream = await navigator.mediaDevices.getUserMedia({ video: true });
-video.srcObject = stream;
-await video.play();
-console.log("Video stream started");
+async function startCamera() {
+  try {
+    stream = await navigator.mediaDevices.getUserMedia({ video: true });
+    video.srcObject = stream;
+    await video.play();
+    console.log("Video stream started");
+  } catch (err) {
+    console.error("Camera access failed:", err);
+  }
+}
+
+function stopCamera() {
+  if (stream) {
+    stream.getTracks().forEach(track => {
+      track.stop();
+      console.log("Video track stopped");
+    });
+    stream = null;
+    video.srcObject = null;
+  }
+}
 
 // ---------------- MEDIAPIPE ----------------
-const vision = await FilesetResolver.forVisionTasks(
-  chrome.runtime.getURL("mediapipe/tasks")
-);
+async function initMediaPipe() {
+  try {
+    vision = await FilesetResolver.forVisionTasks(
+      chrome.runtime.getURL("mediapipe/tasks")
+    );
 
-const handLandmarker = await HandLandmarker.createFromOptions(vision, {
-  baseOptions: {
-    modelAssetPath: chrome.runtime.getURL(
-      "mediapipe/tasks/hand_landmarker.task"
-    )
-  },
-  runningMode: "VIDEO",
-  numHands: 1
-});
+    handLandmarker = await HandLandmarker.createFromOptions(vision, {
+      baseOptions: {
+        modelAssetPath: chrome.runtime.getURL(
+          "mediapipe/tasks/hand_landmarker.task"
+        )
+      },
+      runningMode: "VIDEO",
+      numHands: 1
+    });
 
-console.log("MediaPipe ready");
+    console.log("MediaPipe ready");
+  } catch (err) {
+    console.error("MediaPipe initialization failed:", err);
+  }
+}
 
 // ---------------- SPEECH ----------------
 function speak(text) {
@@ -84,7 +140,7 @@ function classifyGesture(f) {
 function loop() {
   const now = performance.now();
 
-  if (!detectionEnabled) {
+  if (!detectionEnabled || !handLandmarker) {
     requestAnimationFrame(loop);
     return;
   }

@@ -10,6 +10,14 @@ chrome.tabs.onUpdated.addListener((tabId, changeInfo, tab) => {
   }
 });
 
+// -------- CLEAR MEET TAB ON CLOSE --------
+chrome.tabs.onRemoved.addListener((tabId) => {
+  if (tabId === meetTabId) {
+    console.log("Meet tab closed, clearing meetTabId");
+    meetTabId = null;
+  }
+});
+
 // -------- MESSAGE ROUTING --------
 chrome.runtime.onMessage.addListener(async (msg) => {
 
@@ -28,6 +36,14 @@ chrome.runtime.onMessage.addListener(async (msg) => {
 
     // 🔑 enable detection in offscreen
     chrome.runtime.sendMessage({ type: "ENABLE_DETECTION" });
+  }
+
+  // STOP DETECTION
+  if (msg.type === "STOP_DETECTION") {
+    console.log("STOP_DETECTION received");
+    
+    // Disable detection in offscreen
+    chrome.runtime.sendMessage({ type: "DISABLE_DETECTION" });
   }
 
   // FORWARD SUBTITLES TO MEET
