@@ -1,0 +1,26 @@
+# Node modules
+node_modules/
+
+# Temporary files
+tmp/
+*.tmp
+*.log
+
+# OS generated files
+.DS_Store
+Thumbs.db
+
+# IDE files
+.vscode/
+.idea/
+*.swp
+*.swo
+
+# Build artifacts
+dist/
+build/
+
+# Extension packaging
+*.zip
+*.crx
+*.pem
