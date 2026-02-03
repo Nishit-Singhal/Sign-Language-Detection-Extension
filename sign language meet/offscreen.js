@@ -29,22 +29,27 @@ chrome.runtime.onMessage.addListener(async (msg) => {
     detectionEnabled = true;
     console.log("Detection ENABLED");
     
-    // Start camera if not already started
-    if (!stream) {
-      isInitializing = true;
-      await startCamera();
+    isInitializing = true;
+    
+    try {
+      // Start camera if not already started
+      if (!stream) {
+        await startCamera();
+      }
+      
+      // Only proceed to MediaPipe if camera started successfully
+      if (stream && !handLandmarker) {
+        await initMediaPipe();
+      }
+    } catch (err) {
+      console.error("Initialization error:", err);
+      detectionEnabled = false;
+    } finally {
       isInitializing = false;
     }
     
-    // Initialize MediaPipe if not already initialized
-    if (!handLandmarker) {
-      isInitializing = true;
-      await initMediaPipe();
-      isInitializing = false;
-    }
-    
-    // Start the animation loop if not already running
-    if (!animationFrameId) {
+    // Start the animation loop if initialization succeeded
+    if (!animationFrameId && handLandmarker) {
       loop();
     }
   }
@@ -68,8 +73,18 @@ chrome.runtime.onMessage.addListener(async (msg) => {
       animationFrameId = null;
     }
     
-    // Clear MediaPipe resources
-    handLandmarker = null;
+    // Cleanup MediaPipe resources properly
+    if (handLandmarker) {
+      try {
+        // Close HandLandmarker if it has a close method
+        if (typeof handLandmarker.close === 'function') {
+          handLandmarker.close();
+        }
+      } catch (err) {
+        console.error("Error closing HandLandmarker:", err);
+      }
+      handLandmarker = null;
+    }
     vision = null;
     
     // Clear subtitles
