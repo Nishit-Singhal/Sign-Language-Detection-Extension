@@ -1,6 +1,8 @@
 console.log("Content script loaded");
 
 let subtitleBox = document.getElementById("sign-language-subtitle");
+const subtitleQueue = [];
+const MAX_SUBTITLE_LINES = 3;
 
 if (!subtitleBox) {
   subtitleBox = document.createElement("div");
@@ -20,6 +22,7 @@ if (!subtitleBox) {
     zIndex: "999999",
     maxWidth: "80%",
     textAlign: "center",
+    whiteSpace: "pre-line",
     display: "none"
   });
 
@@ -31,9 +34,14 @@ chrome.runtime.onMessage.addListener((msg) => {
     console.log("Subtitle received:", msg.text);
 
     if (msg.text && msg.text.trim() !== "") {
-      subtitleBox.innerText = msg.text;
+      subtitleQueue.push(msg.text.trim());
+      while (subtitleQueue.length > MAX_SUBTITLE_LINES) {
+        subtitleQueue.shift();
+      }
+      subtitleBox.innerText = subtitleQueue.join("\n");
       subtitleBox.style.display = "block";
     } else {
+      subtitleQueue.length = 0;
       subtitleBox.style.display = "none";
     }
   }
