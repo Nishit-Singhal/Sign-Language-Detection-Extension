@@ -12,23 +12,40 @@ let lastSeen = 0;
 let stream = null;
 let handLandmarker = null;
 let vision = null;
+let isInitializing = false;
+let animationFrameId = null;
 
 const CLEAR_DELAY = 800;
 
 // ---------------- ENABLE/DISABLE DETECTION ----------------
 chrome.runtime.onMessage.addListener(async (msg) => {
   if (msg.type === "ENABLE_DETECTION") {
+    // Prevent duplicate initialization
+    if (isInitializing) {
+      console.log("Initialization already in progress, ignoring duplicate request");
+      return;
+    }
+    
     detectionEnabled = true;
     console.log("Detection ENABLED");
     
     // Start camera if not already started
     if (!stream) {
+      isInitializing = true;
       await startCamera();
+      isInitializing = false;
     }
     
     // Initialize MediaPipe if not already initialized
     if (!handLandmarker) {
+      isInitializing = true;
       await initMediaPipe();
+      isInitializing = false;
+    }
+    
+    // Start the animation loop if not already running
+    if (!animationFrameId) {
+      loop();
     }
   }
   
@@ -44,6 +61,16 @@ chrome.runtime.onMessage.addListener(async (msg) => {
     
     // Stop camera
     stopCamera();
+    
+    // Stop animation loop
+    if (animationFrameId) {
+      cancelAnimationFrame(animationFrameId);
+      animationFrameId = null;
+    }
+    
+    // Clear MediaPipe resources
+    handLandmarker = null;
+    vision = null;
     
     // Clear subtitles
     chrome.runtime.sendMessage({
@@ -138,13 +165,14 @@ function classifyGesture(f) {
 
 // ---------------- LOOP ----------------
 function loop() {
-  const now = performance.now();
-
   if (!detectionEnabled || !handLandmarker) {
-    requestAnimationFrame(loop);
+    // Don't schedule next frame if detection is disabled
+    // Will be restarted when ENABLE_DETECTION is received
+    animationFrameId = null;
     return;
   }
 
+  const now = performance.now();
   const res = handLandmarker.detectForVideo(video, now);
 
   if (res.landmarks && res.landmarks.length > 0) {
@@ -179,7 +207,8 @@ function loop() {
     speechSynthesis.cancel();
   }
 
-  requestAnimationFrame(loop);
+  animationFrameId = requestAnimationFrame(loop);
 }
 
-loop();
+// Don't start loop automatically - wait for ENABLE_DETECTION
+// loop();
