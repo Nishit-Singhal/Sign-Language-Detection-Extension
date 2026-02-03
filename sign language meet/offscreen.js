@@ -9,39 +9,137 @@ const video = document.getElementById("video");
 let detectionEnabled = false;
 let lastGesture = "";
 let lastSeen = 0;
+let stream = null;
+let handLandmarker = null;
+let vision = null;
+let isInitializing = false;
+let animationFrameId = null;
 
 const CLEAR_DELAY = 800;
 
-// ---------------- ENABLE DETECTION ----------------
-chrome.runtime.onMessage.addListener(msg => {
+// ---------------- ENABLE/DISABLE DETECTION ----------------
+chrome.runtime.onMessage.addListener(async (msg) => {
   if (msg.type === "ENABLE_DETECTION") {
+    // Prevent duplicate initialization
+    if (isInitializing) {
+      console.log("Initialization already in progress, ignoring duplicate request");
+      return;
+    }
+    
     detectionEnabled = true;
     console.log("Detection ENABLED");
+    
+    isInitializing = true;
+    
+    try {
+      // Start camera if not already started
+      if (!stream) {
+        await startCamera();
+      }
+      
+      // Only proceed to MediaPipe if camera started successfully
+      if (stream && !handLandmarker) {
+        await initMediaPipe();
+      }
+    } catch (err) {
+      console.error("Initialization error:", err);
+      detectionEnabled = false;
+    } finally {
+      isInitializing = false;
+    }
+    
+    // Start the animation loop if initialization succeeded
+    if (!animationFrameId && handLandmarker) {
+      loop();
+    }
+  }
+  
+  if (msg.type === "DISABLE_DETECTION") {
+    detectionEnabled = false;
+    console.log("Detection DISABLED");
+    
+    // Stop speech
+    speechSynthesis.cancel();
+    
+    // Clear last gesture
+    lastGesture = "";
+    
+    // Stop camera
+    stopCamera();
+    
+    // Stop animation loop
+    if (animationFrameId) {
+      cancelAnimationFrame(animationFrameId);
+      animationFrameId = null;
+    }
+    
+    // Cleanup MediaPipe resources properly
+    if (handLandmarker) {
+      try {
+        // Close HandLandmarker if it has a close method
+        if (typeof handLandmarker.close === 'function') {
+          handLandmarker.close();
+        }
+      } catch (err) {
+        console.error("Error closing HandLandmarker:", err);
+      }
+      handLandmarker = null;
+    }
+    vision = null;
+    
+    // Clear subtitles
+    chrome.runtime.sendMessage({
+      type: "SIGN_DETECTED",
+      text: ""
+    });
   }
 });
 
 // ---------------- CAMERA ----------------
-const stream = await navigator.mediaDevices.getUserMedia({ video: true });
-video.srcObject = stream;
-await video.play();
-console.log("Video stream started");
+async function startCamera() {
+  try {
+    stream = await navigator.mediaDevices.getUserMedia({ video: true });
+    video.srcObject = stream;
+    await video.play();
+    console.log("Video stream started");
+  } catch (err) {
+    console.error("Camera access failed:", err);
+  }
+}
+
+function stopCamera() {
+  if (stream) {
+    stream.getTracks().forEach(track => {
+      track.stop();
+      console.log("Video track stopped");
+    });
+    stream = null;
+    video.srcObject = null;
+  }
+}
 
 // ---------------- MEDIAPIPE ----------------
-const vision = await FilesetResolver.forVisionTasks(
-  chrome.runtime.getURL("mediapipe/tasks")
-);
+async function initMediaPipe() {
+  try {
+    vision = await FilesetResolver.forVisionTasks(
+      chrome.runtime.getURL("mediapipe/tasks")
+    );
 
-const handLandmarker = await HandLandmarker.createFromOptions(vision, {
-  baseOptions: {
-    modelAssetPath: chrome.runtime.getURL(
-      "mediapipe/tasks/hand_landmarker.task"
-    )
-  },
-  runningMode: "VIDEO",
-  numHands: 1
-});
+    handLandmarker = await HandLandmarker.createFromOptions(vision, {
+      baseOptions: {
+        modelAssetPath: chrome.runtime.getURL(
+          "mediapipe/tasks/hand_landmarker.task"
+        )
+      },
+      runningMode: "VIDEO",
+      numHands: 1
+    });
 
-console.log("MediaPipe ready");
+    console.log("MediaPipe ready");
+  } catch (err) {
+    console.error("MediaPipe initialization failed:", err);
+  }
+}
 
 // ---------------- SPEECH ----------------
 function speak(text) {
@@ -82,13 +180,14 @@ function classifyGesture(f) {
 
 // ---------------- LOOP ----------------
 function loop() {
-  const now = performance.now();
-
-  if (!detectionEnabled) {
-    requestAnimationFrame(loop);
+  if (!detectionEnabled || !handLandmarker) {
+    // Don't schedule next frame if detection is disabled
+    // Will be restarted when ENABLE_DETECTION is received
+    animationFrameId = null;
     return;
   }
 
+  const now = performance.now();
   const res = handLandmarker.detectForVideo(video, now);
 
   if (res.landmarks && res.landmarks.length > 0) {
@@ -123,7 +222,8 @@ function loop() {
     speechSynthesis.cancel();
   }
 
-  requestAnimationFrame(loop);
+  animationFrameId = requestAnimationFrame(loop);
 }
 
-loop();
+// Don't start loop automatically - wait for ENABLE_DETECTION
+// loop();

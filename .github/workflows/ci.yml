@@ -1,0 +1,126 @@
+name: CI Pipeline
+
+on:
+  push:
+    branches: [ main, master, develop ]
+  pull_request:
+    branches: [ main, master, develop ]
+
+jobs:
+  lint-and-validate:
+    runs-on: ubuntu-latest
+    
+    permissions:
+      contents: read
+    
+    steps:
+    - name: Checkout code
+      uses: actions/checkout@v3
+
+    - name: Validate manifest.json
+      run: |
+        echo "Validating manifest.json..."
+        if [ -f "sign language meet/manifest.json" ]; then
+          # Check if manifest.json is valid JSON
+          if jq empty "sign language meet/manifest.json" 2>/dev/null; then
+            echo "✓ manifest.json is valid JSON"
+          else
+            echo "✗ manifest.json is invalid JSON"
+            exit 1
+          fi
+          
+          # Check for required fields
+          REQUIRED_FIELDS=("manifest_version" "name" "version")
+          for field in "${REQUIRED_FIELDS[@]}"; do
+            if jq -e ".$field" "sign language meet/manifest.json" > /dev/null 2>&1; then
+              echo "✓ Required field '$field' present"
+            else
+              echo "✗ Required field '$field' missing"
+              exit 1
+            fi
+          done
+        else
+          echo "✗ manifest.json not found"
+          exit 1
+        fi
+
+    - name: Check JavaScript files exist
+      run: |
+        echo "Checking for required JavaScript files..."
+        REQUIRED_FILES=(
+          "sign language meet/background.js"
+          "sign language meet/content.js"
+          "sign language meet/offscreen.js"
+          "sign language meet/popup.js"
+        )
+        
+        for file in "${REQUIRED_FILES[@]}"; do
+          if [ -f "$file" ]; then
+            echo "✓ $file exists"
+          else
+            echo "✗ $file not found"
+            exit 1
+          fi
+        done
+
+    - name: Check HTML files exist
+      run: |
+        echo "Checking for required HTML files..."
+        REQUIRED_FILES=(
+          "sign language meet/popup.html"
+          "sign language meet/offscreen.html"
+        )
+        
+        for file in "${REQUIRED_FILES[@]}"; do
+          if [ -f "$file" ]; then
+            echo "✓ $file exists"
+          else
+            echo "✗ $file not found"
+            exit 1
+          fi
+        done
+
+    - name: Validate JavaScript syntax
+      run: |
+        echo "Validating JavaScript syntax..."
+        # Install Node.js for syntax checking
+        for js_file in "sign language meet"/*.js; do
+          if [ -f "$js_file" ] && [ "$(basename "$js_file")" != "vision_wasm_nosimd_internal.js" ] && [ "$(basename "$js_file")" != "vision_wasm_internal.js" ]; then
+            echo "Checking $js_file..."
+            node --check "$js_file" 2>&1 || {
+              echo "✗ Syntax error in $js_file"
+              exit 1
+            }
+            echo "✓ $js_file syntax valid"
+          fi
+        done
+
+    - name: Check for console.log usage
+      run: |
+        echo "Checking for excessive console logging..."
+        # This is a soft check - warns but doesn't fail
+        if grep -r "console.table" "sign language meet"/*.js 2>/dev/null; then
+          echo "⚠️  Warning: console.table() found in code (may produce heavy output)"
+        fi
+        echo "Console logging check complete"
+
+    - name: Verify MediaPipe assets
+      run: |
+        echo "Checking for MediaPipe dependencies..."
+        if [ -d "sign language meet/mediapipe" ]; then
+          echo "✓ MediaPipe directory exists"
+          if [ -d "sign language meet/mediapipe/tasks" ]; then
+            echo "✓ MediaPipe tasks directory exists"
+          else
+            echo "⚠️  Warning: MediaPipe tasks directory not found"
+          fi
+        else
+          echo "⚠️  Warning: MediaPipe directory not found"
+        fi
+
+    - name: CI Summary
+      run: |
+        echo "================================"
+        echo "CI Pipeline completed successfully!"
+        echo "================================"
+        echo "All critical checks passed ✓"
