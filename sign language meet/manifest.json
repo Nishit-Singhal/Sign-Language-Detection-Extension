@@ -6,7 +6,8 @@
 
   "permissions": [
     "activeTab",
-    "offscreen"
+    "offscreen",
+    "camera"
   ],
 
   "host_permissions": [

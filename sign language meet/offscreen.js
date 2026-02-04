@@ -14,8 +14,11 @@ let handLandmarker = null;
 let vision = null;
 let isInitializing = false;
 let animationFrameId = null;
+let lastMessageSent = "";
+let frameCount = 0;
+let lastHeartbeat = 0;
 
-const CLEAR_DELAY = 800;
+const CLEAR_DELAY = 400; // shorter clear delay for more responsive clearing
 
 // ---------------- ENABLE/DISABLE DETECTION ----------------
 chrome.runtime.onMessage.addListener(async (msg) => {
@@ -44,6 +47,11 @@ chrome.runtime.onMessage.addListener(async (msg) => {
     } catch (err) {
       console.error("Initialization error:", err);
       detectionEnabled = false;
+      
+      // Provide user feedback about permission requirement
+      if (err.name === "NotAllowedError") {
+        console.error("❌ Camera permission required! Please grant camera access to use sign language detection.");
+      }
     } finally {
       isInitializing = false;
     }
@@ -102,8 +110,12 @@ async function startCamera() {
     video.srcObject = stream;
     await video.play();
     console.log("Video stream started");
+    return true;
   } catch (err) {
     console.error("Camera access failed:", err);
+    stream = null;
+    detectionEnabled = false;
+    throw err;
   }
 }
 
@@ -188,7 +200,10 @@ function loop() {
   }
 
   const now = performance.now();
+  frameCount++;
   const res = handLandmarker.detectForVideo(video, now);
+
+  let currentGesture = "";
 
   if (res.landmarks && res.landmarks.length > 0) {
     lastSeen = now;
@@ -196,30 +211,44 @@ function loop() {
     const fingers = getFingerStates(res.landmarks[0]);
     console.table(fingers);
 
-    const gesture = classifyGesture(fingers);
+    currentGesture = classifyGesture(fingers);
 
-    // 🔥 DIRECT CHANGE DETECTION
-    if (gesture && gesture !== lastGesture) {
-      lastGesture = gesture;
-      console.log("Gesture detected:", gesture);
-
-      chrome.runtime.sendMessage({
-        type: "SIGN_DETECTED",
-        text: gesture
-      });
-
-      speak(gesture.replace(/[^a-zA-Z ]/g, ""));
+    // Speak only when gesture changes
+    if (currentGesture && currentGesture !== lastGesture) {
+      console.log("Gesture detected:", currentGesture);
+      speak(currentGesture.replace(/[^a-zA-Z ]/g, ""));
     }
+    lastGesture = currentGesture;
   }
 
   // CLEAR WHEN HAND REMOVED
   if (lastGesture && now - lastSeen > CLEAR_DELAY) {
+    currentGesture = "";
     lastGesture = "";
-    chrome.runtime.sendMessage({
-      type: "SIGN_DETECTED",
-      text: ""
-    });
     speechSynthesis.cancel();
+  }
+
+  // Send message when gesture changes OR on heartbeat to ensure timely updates
+  const shouldHeartbeat = (now - lastHeartbeat) > 500; // ms
+  if (currentGesture !== lastMessageSent || shouldHeartbeat) {
+    lastMessageSent = currentGesture;
+    if (shouldHeartbeat) lastHeartbeat = now;
+
+    console.log("Sending message:", currentGesture || "(empty)", "frame:", frameCount, "perf:", now, "heartbeat:", shouldHeartbeat);
+
+    const message = {
+      type: "SIGN_DETECTED",
+      text: currentGesture,
+      ts: Date.now(),
+      perf: now,
+      frame: frameCount,
+      fingers: (res.landmarks && res.landmarks.length > 0) ? getFingerStates(res.landmarks[0]) : null,
+      heartbeat: shouldHeartbeat
+    };
+
+    chrome.runtime.sendMessage(message).catch(err => {
+      console.error("Error sending message:", err);
+    });
   }
 
   animationFrameId = requestAnimationFrame(loop);
