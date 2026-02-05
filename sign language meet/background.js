@@ -1,6 +1,7 @@
 console.log("Background loaded");
 
 let meetTabId = null;
+let cameraWindowId = null;
 
 // -------- STORE MEET TAB --------
 chrome.tabs.onUpdated.addListener((tabId, changeInfo, tab) => {
@@ -18,32 +19,56 @@ chrome.tabs.onRemoved.addListener((tabId) => {
   }
 });
 
+// -------- CLEAR CAMERA WINDOW ON CLOSE --------
+chrome.windows.onRemoved.addListener((windowId) => {
+  if (windowId === cameraWindowId) {
+    console.log("Camera window closed");
+    cameraWindowId = null;
+  }
+});
+
 // -------- MESSAGE ROUTING --------
 chrome.runtime.onMessage.addListener(async (msg) => {
 
-  // START DETECTION
+  // START DETECTION - open camera window
   if (msg.type === "START_DETECTION") {
     console.log("START_DETECTION received");
 
-    if (!(await chrome.offscreen.hasDocument())) {
-      await chrome.offscreen.createDocument({
-        url: "offscreen.html",
-        reasons: ["USER_MEDIA"],
-        justification: "Hand gesture recognition"
-      });
-      console.log("Offscreen document created");
+    // If window already exists, focus it
+    if (cameraWindowId) {
+      try {
+        await chrome.windows.update(cameraWindowId, { focused: true });
+        return;
+      } catch (e) {
+        // Window doesn't exist anymore
+        cameraWindowId = null;
+      }
     }
 
-    // 🔑 enable detection in offscreen
-    chrome.runtime.sendMessage({ type: "ENABLE_DETECTION" });
+    // Open camera window
+    const win = await chrome.windows.create({
+      url: chrome.runtime.getURL("camera.html"),
+      type: "popup",
+      width: 360,
+      height: 320,
+      focused: true
+    });
+    cameraWindowId = win.id;
+    console.log("Camera window created:", cameraWindowId);
   }
 
-  // STOP DETECTION
+  // STOP DETECTION - close camera window
   if (msg.type === "STOP_DETECTION") {
     console.log("STOP_DETECTION received");
     
-    // Disable detection in offscreen
-    chrome.runtime.sendMessage({ type: "DISABLE_DETECTION" });
+    if (cameraWindowId) {
+      try {
+        await chrome.windows.remove(cameraWindowId);
+      } catch (e) {
+        console.log("Window already closed");
+      }
+      cameraWindowId = null;
+    }
   }
 
   // FORWARD SUBTITLES TO MEET
