@@ -15,11 +15,12 @@ let handLandmarker = null;
 let animationFrameId = null;
 
 const CLEAR_DELAY = 800;
+const CONFIDENCE_THRESHOLD = 0.75;
 
 // ---------------- STATUS UPDATE ----------------
 function setStatus(text, isError = false) {
   status.textContent = text;
-  status.className = isError ? 'error' : 'success';
+  status.className = isError ? "error" : "success";
 }
 
 // ---------------- CAMERA ----------------
@@ -40,10 +41,7 @@ async function startCamera() {
 
 function stopCamera() {
   if (stream) {
-    stream.getTracks().forEach(track => {
-      track.stop();
-      console.log("Video track stopped");
-    });
+    stream.getTracks().forEach(track => track.stop());
     stream = null;
     video.srcObject = null;
   }
@@ -53,7 +51,7 @@ function stopCamera() {
 async function initMediaPipe() {
   try {
     setStatus("Loading MediaPipe...");
-    
+
     const vision = await FilesetResolver.forVisionTasks(
       chrome.runtime.getURL("mediapipe/tasks")
     );
@@ -82,37 +80,57 @@ async function initMediaPipe() {
 function speak(text) {
   if (!text) return;
   speechSynthesis.cancel();
-  speechSynthesis.speak(
-    new SpeechSynthesisUtterance(text)
-  );
+  speechSynthesis.speak(new SpeechSynthesisUtterance(text));
 }
 
-// ---------------- FINGER STATES ----------------
-function getFingerStates(lm) {
-  return {
-    thumb:  Math.abs(lm[4].x - lm[2].x) > 0.04,
-    index:  lm[8].y  < lm[6].y,
-    middle: lm[12].y < lm[10].y,
-    ring:   lm[16].y < lm[14].y,
-    pinky:  lm[20].y < lm[18].y
-  };
-}
+// ---------------- ML BACKEND ----------------
+async function sendToBackend(landmarks) {
 
-// ---------------- CLASSIFIER ----------------
-function classifyGesture(f) {
-  if (f.index && !f.middle && !f.ring && !f.pinky)
-    return "YES ☝️";
+  // Normalize landmarks (subtract wrist)
+  const wrist = landmarks[0];
+  let flat = [];
 
-  if (f.index && f.middle && !f.ring && !f.pinky)
-    return "TWO ✌️";
+  for (let lm of landmarks) {
+    flat.push(lm.x - wrist.x);
+    flat.push(lm.y - wrist.y);
+    flat.push(lm.z - wrist.z);
+  }
 
-  if (!f.index && !f.middle && !f.ring && !f.pinky)
-    return "STOP ✋";
+  try {
+    const response = await fetch("http://127.0.0.1:8000/predict", {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json"
+      },
+      body: JSON.stringify({ landmarks: flat })
+    });
 
-  if (f.index && f.middle && f.ring)
-    return "HELLO 👋";
+    const data = await response.json();
 
-  return "";
+    if (
+      data.confidence > CONFIDENCE_THRESHOLD &&
+      data.word !== lastGesture
+    ) {
+      lastGesture = data.word;
+      lastSeen = performance.now();
+
+      console.log("ML Prediction:", data.word, data.confidence);
+
+      setStatus(
+        `Detected: ${data.word} (${(data.confidence * 100).toFixed(1)}%)`
+      );
+
+      chrome.runtime.sendMessage({
+        type: "SIGN_DETECTED",
+        text: data.word
+      });
+
+      speak(data.word);
+    }
+
+  } catch (error) {
+    console.error("Backend error:", error);
+  }
 }
 
 // ---------------- LOOP ----------------
@@ -127,25 +145,10 @@ function loop() {
 
   if (res.landmarks && res.landmarks.length > 0) {
     lastSeen = now;
-
-    const fingers = getFingerStates(res.landmarks[0]);
-    const gesture = classifyGesture(fingers);
-
-    if (gesture && gesture !== lastGesture) {
-      lastGesture = gesture;
-      console.log("Gesture detected:", gesture);
-      setStatus("Detected: " + gesture);
-
-      chrome.runtime.sendMessage({
-        type: "SIGN_DETECTED",
-        text: gesture
-      });
-
-      speak(gesture.replace(/[^a-zA-Z ]/g, ""));
-    }
+    sendToBackend(res.landmarks[0]);
   }
 
-  // CLEAR WHEN HAND REMOVED
+  // Clear when hand removed
   if (lastGesture && now - lastSeen > CLEAR_DELAY) {
     lastGesture = "";
     setStatus("Detecting gestures...");
@@ -162,22 +165,21 @@ function loop() {
 // ---------------- INIT ----------------
 async function init() {
   setStatus("Requesting camera access...");
-  
+
   const cameraOk = await startCamera();
   if (!cameraOk) return;
-  
+
   const mpOk = await initMediaPipe();
   if (!mpOk) return;
-  
+
   detectionEnabled = true;
   loop();
 }
 
-// Start immediately when window opens
 init();
 
-// Handle window close
-window.addEventListener('beforeunload', () => {
+// Cleanup
+window.addEventListener("beforeunload", () => {
   stopCamera();
   if (handLandmarker) {
     try {

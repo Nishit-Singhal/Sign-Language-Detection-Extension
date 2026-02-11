@@ -24,3 +24,6 @@ build/
 *.zip
 *.crx
 *.pem
+
+.venv/
+venv/
