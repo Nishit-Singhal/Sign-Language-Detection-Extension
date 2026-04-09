@@ -1,92 +1,145 @@
-# Sign Language to Speech & Subtitles for Google Meet
+# Sign Language Meet
 
-A Chrome Extension that enables real-time sign language communication on Google Meet by converting hand gestures into live subtitles and synthesized speech. This project aims to improve accessibility for hearing- and speech-impaired users during online meetings.
+Sign Language Meet is a Chrome extension for Google Meet that turns detected sign language gestures into on-screen subtitles and speech. The current codebase uses a hybrid approach:
 
-## 🚀 Features
+- Primary path: a local Python ML backend at `http://127.0.0.1:8000`
+- Fallback path: in-extension MediaPipe hand landmarks plus a small rule-based classifier
 
-- ✋ Real-time hand gesture recognition using MediaPipe
-- 💬 Live subtitles overlay on Google Meet
-- 🔊 Text-to-speech voice output for detected gestures
-- ⚡ No page reloads required – fully dynamic
-- 🧠 Modular architecture using Chrome’s Offscreen API
-- 🧩 Easily extensible for ML-based gesture recognition (ISL/ASL)
+## What The Current Code Does
 
-## 🏗️ Architecture Overview
+- Opens a popup camera window from the extension popup
+- Captures webcam frames in `sign language meet/camera.js`
+- Checks whether the local backend is running
+- Sends JPEG frames to `backend/serve_model.py` when the backend is available
+- Receives word predictions, confidence scores, and sentence assembly state
+- Shows detected text as a subtitle overlay on Google Meet
+- Speaks detected text with the browser `speechSynthesis` API
+- Falls back to four built-in gestures if the backend is unavailable
 
-User Hand Gesture
-        ↓
-Offscreen Document (Camera + MediaPipe)
-        ↓
-Gesture Classification Logic
-        ↓
-Background Service Worker
-        ↓
-Google Meet Content Script
-        ↓
-Live Subtitles + Speech Output
+## Current Runtime Flow
 
-## Components
+1. The user clicks `Start Detection` in the extension popup.
+2. `background.js` opens `camera.html` in a popup window.
+3. `camera.js` starts the webcam and checks `GET /health` on the local backend.
+4. If the backend is reachable, frames are sent to `POST /predict`.
+5. The backend runs MediaPipe Holistic, builds a temporal sequence, and performs TensorFlow inference.
+6. Confirmed words are sent back to the extension.
+7. `background.js` forwards the text to the active Google Meet tab.
+8. `content.js` shows up to three recent subtitle lines on the page.
+9. If the backend is not reachable, `camera.js` switches to the built-in MediaPipe hand-rule fallback.
 
-| Component | Responsibility |
-| --- | --- |
-| offscreen.js | Camera access, MediaPipe hand tracking, gesture detection |
-| background.js | Message routing between offscreen & Meet tab |
-| content.js | Injects subtitle overlay into Google Meet |
-| popup.html/js | Start detection UI |
-| MediaPipe Tasks | Hand landmark detection |
+## Repository Layout
 
-## 🛠️ Technologies Used
+```text
+Sign-Language-Detection-Extension/
+|- README.md
+|- ARCHITECTURE.md
+|- PROJECT_DOCUMENTATION.md
+|- backend/
+|  |- requirements.txt
+|  `- serve_model.py
+|- embeddings/
+|  |- include50_bilstm_best.keras
+|  |- include50_scaler.pkl
+|  |- include50_config.json
+|  `- include50_label_map.json
+`- sign language meet/
+   |- manifest.json
+   |- popup.html
+   |- popup.js
+   |- background.js
+   |- content.js
+   |- camera.html
+   |- camera.js
+   |- offscreen.html
+   |- offscreen.js
+   `- mediapipe/tasks/
+```
 
-- JavaScript (ES6)
-- Chrome Extension Manifest V3
-- MediaPipe Tasks (HandLandmarker)
-- Web Speech API (SpeechSynthesis)
-- Google Meet DOM Injection
-- Offscreen Documents API
+## ML Backend Details
 
-## ✋ Supported Gestures (Prototype)
+The backend lives in [backend/serve_model.py](/d:/Nishit/Sign-Language-Detection-Extension/backend/serve_model.py).
 
-| Gesture | Output |
-| --- | --- |
-| ☝️ Index finger | YES |
-| ✌️ Index + Middle | TWO |
-| ✊ Fist | STOP |
-| 🖐️ Open palm | HELLO |
+- Host: `127.0.0.1`
+- Port: `8000`
+- Framework style: standard library `ThreadingHTTPServer`
+- Model file: `embeddings/include50_bilstm_best.keras`
+- Scaler file: `embeddings/include50_scaler.pkl`
+- Label map size: `262` classes
+- Sequence length: `60`
+- Feature dimension per frame: `201`
 
-⚠️ Gesture recognition is heuristic-based and sensitive to lighting and camera angles.
+The backend exposes:
 
-## 🎯 How It Works
+- `GET /health` for availability checks
+- `POST /predict` for frame inference
+- `POST /reset` to clear the running sequence and sentence state
 
-1. User clicks Start Detection from the extension popup.
-2. Offscreen document accesses the webcam.
-3. MediaPipe detects 21 hand landmarks per frame.
-4. Finger states are derived using landmark geometry.
-5. Gestures are classified and sent to the background worker.
-6. Background forwards text to the Meet tab.
-7. Content script updates subtitles and plays speech.
+## Fallback Mode
 
-## ▶️ How to Run Locally
+If the local backend is not running, the extension still works with a small rule-based classifier built on MediaPipe hand landmarks. The current fallback outputs are:
 
-1. Clone this repository.
-2. Open Chrome → chrome://extensions.
-3. Enable Developer Mode.
-4. Click Load Unpacked.
-5. Select the project folder.
-6. Open Google Meet.
-7. Click the extension → Start Detection.
-8. Show hand gestures in front of the camera.
+- `yes`
+- `two`
+- `stop`
+- `hello`
 
-## ⚠️ Limitations
+This fallback is useful for demos, but it is much more limited than the ML path.
 
-- Gesture detection uses rule-based heuristics, not ML.
-- Thumb detection is unreliable due to camera orientation.
-- No sentence-level sign recognition yet.
-- Currently supports only a small gesture set.
+## Setup
 
-## 🔮 Future Improvements
+### 1. Install the backend dependencies
 
-- 🤖 Train an ML model (LSTM / Transformer) using WLASL or ISL datasets.
-- 📊 Temporal smoothing with sliding window inference.
-- 🧠 Sentence-level sign language translation.
-- 🌐 Multi-language subtitle support.
-- 🎥 Improved hand pose normalization.
+Create or activate a Python environment, then install:
+
+```bash
+pip install -r backend/requirements.txt
+```
+
+### 2. Start the local backend
+
+From the repository root:
+
+```bash
+python backend/serve_model.py
+```
+
+Expected server URL:
+
+```text
+http://127.0.0.1:8000
+```
+
+### 3. Load the Chrome extension
+
+1. Open `chrome://extensions/`
+2. Enable Developer Mode
+3. Click `Load unpacked`
+4. Select the `sign language meet` folder
+
+### 4. Use it on Google Meet
+
+1. Open a Google Meet tab
+2. Click the extension icon
+3. Click `Start Detection`
+4. Allow webcam access if prompted
+
+## Permissions
+
+The current `manifest.json` requests:
+
+- `activeTab`
+- `offscreen`
+
+Host permissions:
+
+- `https://meet.google.com/*`
+- `http://127.0.0.1:8000/*`
+
+The extra localhost permission is required for extension-to-backend requests.
+
+## Notes
+
+- The backend is the main inference path in the current codebase.
+- `offscreen.js` is still present, but the active start/stop flow currently uses the popup camera window.
+- Existing older docs that described the project as a four-gesture-only heuristic system are no longer accurate.
